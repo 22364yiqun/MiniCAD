@@ -6,6 +6,7 @@
 #include <cwchar>
 #include <vector>
 #include <algorithm>
+#include <limits>
 
 #pragma comment(lib, "opengl32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -13,20 +14,77 @@
 struct Vec3 { double x, y, z; };
 struct Line { Vec3 a, b; };
 
+static bool operator==(const Vec3& lhs, const Vec3& rhs) {
+    return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
+}
+
+static bool operator==(const Line& lhs, const Line& rhs) {
+    return lhs.a == rhs.a && lhs.b == rhs.b;
+}
+
 static HWND gWindow = nullptr;
 static HDC gDc = nullptr;
 static HGLRC gGl = nullptr;
 static int gWidth = 1000, gHeight = 700;
-static double gYaw = -35.0, gPitch = 35.0, gZoom = 1.0;
+static double gZoom = 1.0;
 static double gPanX = 0.0, gPanY = 0.0;
 static bool gLeftDown = false, gRightDown = false, gMiddleDown = false;
 static POINT gLastMouse{};
 static std::vector<Line> gLines;
 static std::vector<std::vector<Line>> gUndo, gRedo;
+static bool gDraggingLine = false;
+static bool gRotatingLine = false;
+static std::size_t gDraggedIndex = 0;
+static Vec3 gDragAnchor{};
+static Vec3 gRotateCenter{};
+static double gRotateStartAngle = 0.0;
+static std::vector<Line> gDragBefore;
 static bool gHasFirstPoint = false;
 static Vec3 gFirstPoint{};
 
 static void pushUndo() { gUndo.push_back(gLines); gRedo.clear(); }
+
+static double distanceSquaredToLine(const Line& line, Vec3 point) {
+    const double dx = line.b.x - line.a.x;
+    const double dy = line.b.y - line.a.y;
+    const double lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared <= 1e-12) {
+        const double px = point.x - line.a.x;
+        const double py = point.y - line.a.y;
+        return px * px + py * py;
+    }
+    const double t = std::clamp(((point.x - line.a.x) * dx + (point.y - line.a.y) * dy) /
+                                     lengthSquared,
+                                 0.0, 1.0);
+    const double nearestX = line.a.x + t * dx;
+    const double nearestY = line.a.y + t * dy;
+    const double px = point.x - nearestX;
+    const double py = point.y - nearestY;
+    return px * px + py * py;
+}
+
+static Vec3 rotateAround(Vec3 point, Vec3 center, double radians) {
+    const double x = point.x - center.x;
+    const double y = point.y - center.y;
+    const double c = std::cos(radians);
+    const double s = std::sin(radians);
+    return {center.x + x * c - y * s, center.y + x * s + y * c, 0.0};
+}
+
+static int findLineAt(Vec3 point) {
+    const double worldTolerance = 8.0 / gZoom;
+    const double threshold = worldTolerance * worldTolerance;
+    double bestDistance = threshold;
+    int bestIndex = -1;
+    for (std::size_t i = 0; i < gLines.size(); ++i) {
+        const double distance = distanceSquaredToLine(gLines[i], point);
+        if (distance <= bestDistance) {
+            bestDistance = distance;
+            bestIndex = static_cast<int>(i);
+        }
+    }
+    return bestIndex;
+}
 
 static void applyCamera() {
     glMatrixMode(GL_PROJECTION);
@@ -37,8 +95,6 @@ static void applyCamera() {
             -half + gPanY, half + gPanY, -1000.0, 1000.0);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
-    glRotated(-gPitch, 1.0, 0.0, 0.0);
-    glRotated(-gYaw, 0.0, 0.0, 1.0);
 }
 
 static void drawGrid() {
@@ -55,7 +111,6 @@ static void drawGrid() {
     glBegin(GL_LINES);
     glColor3f(0.85f, 0.18f, 0.15f); glVertex3d(-200, 0, 0); glVertex3d(200, 0, 0);
     glColor3f(0.18f, 0.75f, 0.25f); glVertex3d(0, -200, 0); glVertex3d(0, 200, 0);
-    glColor3f(0.20f, 0.45f, 0.95f); glVertex3d(0, 0, -80); glVertex3d(0, 0, 80);
     glEnd();
 }
 
@@ -66,9 +121,11 @@ static void drawScene() {
     applyCamera();
     drawGrid();
     glLineWidth(4.0f);
-    glColor3f(1.0f, 0.82f, 0.18f);
     glBegin(GL_LINES);
-    for (const auto& line : gLines) {
+    for (std::size_t i = 0; i < gLines.size(); ++i) {
+        const auto& line = gLines[i];
+        if (gDraggingLine && i == gDraggedIndex) glColor3f(0.25f, 1.0f, 0.45f);
+        else glColor3f(1.0f, 0.82f, 0.18f);
         glVertex3d(line.a.x, line.a.y, line.a.z);
         glVertex3d(line.b.x, line.b.y, line.b.z);
     }
@@ -93,7 +150,7 @@ static Vec3 screenToPlane(int x, int y) {
 
 static void setTitle() {
     wchar_t title[256];
-    std::swprintf(title, 256, L"3D Line Viewer | LMB: create line  RMB: orbit  MMB: pan  Wheel: zoom | Lines: %llu | Ctrl+Z/Y",
+    std::swprintf(title, 256, L"2D Line Viewer | LMB create/move  Shift+LMB rotate  RMB/MMB pan  Wheel zoom | Lines: %llu | Ctrl+Z/Y",
                    static_cast<unsigned long long>(gLines.size()));
     SetWindowTextW(gWindow, title);
 }
@@ -109,17 +166,68 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     case WM_LBUTTONDOWN:
         SetCapture(hwnd); gLeftDown = true;
         gLastMouse = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-        if (!gHasFirstPoint) { gFirstPoint = screenToPlane(gLastMouse.x, gLastMouse.y); gHasFirstPoint = true; }
-        else { pushUndo(); gLines.push_back({gFirstPoint, screenToPlane(gLastMouse.x, gLastMouse.y)}); gHasFirstPoint = false; setTitle(); }
+        {
+            const Vec3 point = screenToPlane(gLastMouse.x, gLastMouse.y);
+            const int hit = findLineAt(point);
+            if (hit >= 0) {
+                gDraggingLine = true;
+                gRotatingLine = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                gDraggedIndex = static_cast<std::size_t>(hit);
+                gDragAnchor = point;
+                gDragBefore = gLines;
+                if (gRotatingLine) {
+                    const auto& line = gLines[gDraggedIndex];
+                    gRotateCenter = {(line.a.x + line.b.x) * 0.5,
+                                     (line.a.y + line.b.y) * 0.5, 0.0};
+                    gRotateStartAngle = std::atan2(point.y - gRotateCenter.y,
+                                                   point.x - gRotateCenter.x);
+                }
+            } else if (!gHasFirstPoint) {
+                gFirstPoint = point;
+                gHasFirstPoint = true;
+            } else {
+                pushUndo();
+                gLines.push_back({gFirstPoint, point});
+                gHasFirstPoint = false;
+                setTitle();
+            }
+        }
         InvalidateRect(hwnd, nullptr, FALSE); return 0;
     case WM_RBUTTONDOWN: SetCapture(hwnd); gRightDown = true; gLastMouse = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)}; return 0;
     case WM_MBUTTONDOWN: SetCapture(hwnd); gMiddleDown = true; gLastMouse = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)}; return 0;
-    case WM_LBUTTONUP: case WM_RBUTTONUP: case WM_MBUTTONUP:
-        gLeftDown = gRightDown = gMiddleDown = false; ReleaseCapture(); return 0;
+    case WM_LBUTTONUP:
+        if (gDraggingLine) {
+            if (gLines != gDragBefore) { gUndo.push_back(gDragBefore); gRedo.clear(); }
+            gDraggingLine = false;
+            gRotatingLine = false;
+            setTitle();
+        }
+        gLeftDown = false; ReleaseCapture(); return 0;
+    case WM_RBUTTONUP: case WM_MBUTTONUP:
+        gRightDown = gMiddleDown = false; ReleaseCapture(); return 0;
     case WM_MOUSEMOVE: {
         POINT p{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         const int dx = p.x - gLastMouse.x, dy = p.y - gLastMouse.y; gLastMouse = p;
-        if (gRightDown) { gYaw += dx * 0.5; gPitch = std::clamp(gPitch + dy * 0.5, -89.0, 89.0); InvalidateRect(hwnd, nullptr, FALSE); }
+        if (gDraggingLine && gLeftDown) {
+            const Vec3 point = screenToPlane(p.x, p.y);
+            if (gRotatingLine) {
+                const double angle = std::atan2(point.y - gRotateCenter.y,
+                                                point.x - gRotateCenter.x);
+                const double deltaAngle = angle - gRotateStartAngle;
+                gLines[gDraggedIndex].a = rotateAround(gDragBefore[gDraggedIndex].a,
+                                                       gRotateCenter, deltaAngle);
+                gLines[gDraggedIndex].b = rotateAround(gDragBefore[gDraggedIndex].b,
+                                                       gRotateCenter, deltaAngle);
+            } else {
+                const Vec3 delta{point.x - gDragAnchor.x, point.y - gDragAnchor.y, 0.0};
+                gLines[gDraggedIndex].a = {gDragBefore[gDraggedIndex].a.x + delta.x,
+                                           gDragBefore[gDraggedIndex].a.y + delta.y, 0.0};
+                gLines[gDraggedIndex].b = {gDragBefore[gDraggedIndex].b.x + delta.x,
+                                           gDragBefore[gDraggedIndex].b.y + delta.y, 0.0};
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        if (gRightDown) { gPanX -= dx * 0.5 / gZoom; gPanY += dy * 0.5 / gZoom; InvalidateRect(hwnd, nullptr, FALSE); }
         if (gMiddleDown) { gPanX -= dx * 0.5 / gZoom; gPanY += dy * 0.5 / gZoom; InvalidateRect(hwnd, nullptr, FALSE); }
         return 0; }
     case WM_MOUSEWHEEL:
@@ -136,10 +244,10 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 }
 
 int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int show) {
-    WNDCLASSW wc{}; wc.hInstance = instance; wc.lpfnWndProc = windowProc; wc.lpszClassName = L"Homework3DViewer";
+    WNDCLASSW wc{}; wc.hInstance = instance; wc.lpfnWndProc = windowProc; wc.lpszClassName = L"Homework2DViewer";
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW); wc.style = CS_OWNDC;
     RegisterClassW(&wc);
-    gWindow = CreateWindowExW(0, wc.lpszClassName, L"3D Line Viewer", WS_OVERLAPPEDWINDOW,
+    gWindow = CreateWindowExW(0, wc.lpszClassName, L"2D Line Viewer", WS_OVERLAPPEDWINDOW,
                               CW_USEDEFAULT, CW_USEDEFAULT, gWidth, gHeight, nullptr, nullptr, instance, nullptr);
     gDc = GetDC(gWindow);
     PIXELFORMATDESCRIPTOR pfd{}; pfd.nSize = sizeof(pfd); pfd.nVersion = 1; pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER; pfd.iPixelType = PFD_TYPE_RGBA; pfd.cColorBits = 24; pfd.cDepthBits = 24;
