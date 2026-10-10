@@ -1,3 +1,4 @@
+#include "version_history.h"
 #include <QActionGroup>
 #include <QApplication>
 #include <QComboBox>
@@ -21,10 +22,10 @@
 #include <cmath>
 #include <functional>
 
-struct CadLine { QPointF a, b; };
+struct CadLine { QPointF a, b; int id = 0; };
 
 static bool operator==(const CadLine& lhs, const CadLine& rhs) {
-    return lhs.a == rhs.a && lhs.b == rhs.b;
+    return lhs.a == rhs.a && lhs.b == rhs.b && lhs.id == rhs.id;
 }
 
 enum class Tool { Select, Create, Move, Rotate, Mirror, Delete };
@@ -34,13 +35,13 @@ static QString pointText(const QPointF& point) {
     return QString("(%1, %2)").arg(point.x(), 0, 'f', 2).arg(point.y(), 0, 'f', 2);
 }
 
-static QString lineDetails(int index, const CadLine& line) {
+static QString lineDetails(const CadLine& line) {
     const double dx = line.b.x() - line.a.x();
     const double dy = line.b.y() - line.a.y();
     const double length = std::hypot(dx, dy);
     const double angle = std::atan2(dy, dx) * 180.0 / std::acos(-1.0);
     return QString("直线 #%1  起点 %2  终点 %3  |  ΔX=%4  ΔY=%5  长度=%6  角度=%7°")
-        .arg(index + 1).arg(pointText(line.a), pointText(line.b))
+        .arg(line.id).arg(pointText(line.a), pointText(line.b))
         .arg(dx, 0, 'f', 2).arg(dy, 0, 'f', 2)
         .arg(length, 0, 'f', 2).arg(angle, 0, 'f', 2);
 }
@@ -56,13 +57,15 @@ public:
         setMouseTracking(true);
     }
 
-    QVector<CadLine> lines;
+    QVector<CadLine> lines; // Current display and transient drag preview only.
+    VersionHistory<CadLine> history;
     Tool tool = Tool::Select;
     std::function<void()> changed;
     std::function<void(const QString&)> command;
     std::function<void(const QString&)> liveStatus;
 
     void setTool(Tool nextTool) {
+        cancelInteraction();
         tool = nextTool;
         hasFirst_ = false;
         hasPreview_ = false;
@@ -71,12 +74,23 @@ public:
     }
 
     void setMirrorAxis(MirrorAxis axis) {
+        cancelInteraction();
         mirrorAxis_ = axis;
         resetCustomMirror();
         rebuild();
     }
 
-    void clearSelection() { selected_ = -1; rebuild(); }
+    void restoreHistoryView() {
+        cancelInteraction();
+        lines.clear();
+        for (const auto& v : history.visibleVersions()) {
+            auto line = v.geometry;
+            line.id = v.id;
+            lines.push_back(line);
+        }
+        selected_ = -1;
+        rebuild();
+    }
 
     void rebuild() {
         scene()->clear();
@@ -141,13 +155,14 @@ protected:
                 rebuild();
                 setLive(QString("LINE  已指定第一点 %1；请指定下一点").arg(pointText(first_)));
             } else {
-                const CadLine created{first_, p};
+                CadLine created{first_, p};
+                created.id = history.create(created);
                 lines.push_back(created); hasFirst_ = false; hasPreview_ = false;
                 selected_ = lines.size() - 1;
                 rebuild();
-                emitCommand(QString("LINE 创建完成  %1").arg(lineDetails(selected_, created)));
+                emitCommand(QString("LINE 创建完成  %1").arg(lineDetails(created)));
                 setLive("命令: LINE（单击指定第一点）");
-                notify();
+                if (changed) changed();
             }
             return;
         }
@@ -161,7 +176,6 @@ protected:
                 rebuild();
                 setLive(QString("MIRROR 自定义轴第一点 %1；请指定第二点").arg(pointText(p)));
             } else if (QLineF(mirrorAxisFirst_, p).length() > 1e-6) {
-                before_ = lines;
                 lines[mirrorTarget_].a = reflectPoint(lines[mirrorTarget_].a, mirrorAxisFirst_, p);
                 lines[mirrorTarget_].b = reflectPoint(lines[mirrorTarget_].b, mirrorAxisFirst_, p);
                 const int completedTarget = mirrorTarget_;
@@ -170,7 +184,7 @@ protected:
                 rebuild();
                 emitCommand(QString("MIRROR 按自定义轴 %1 → %2 完成  %3")
                     .arg(pointText(mirrorAxisFirst_), pointText(p),
-                         lineDetails(completedTarget, lines[completedTarget])));
+                         lineDetails(lines[completedTarget])));
                 setLive("命令: MIRROR（请选择对象）");
                 notify();
             } else {
@@ -189,7 +203,7 @@ protected:
 
         selected_ = index;
         rebuild();
-        emitCommand(QString("SELECT %1").arg(lineDetails(index, lines[index])));
+        emitCommand(QString("SELECT %1").arg(lineDetails(lines[index])));
 
         if (tool == Tool::Mirror && mirrorAxis_ == MirrorAxis::Custom) {
             mirrorTarget_ = index;
@@ -198,24 +212,23 @@ protected:
         }
 
         if (tool == Tool::Delete) {
-            const QString deleted = lineDetails(index, lines[index]);
-            before_ = lines; lines.remove(index); selected_ = -1; rebuild();
+            const QString deleted = lineDetails(lines[index]);
+            history.erase(lines[index].id); lines.remove(index); selected_ = -1; rebuild();
             emitCommand(QString("ERASE 已删除  %1").arg(deleted));
-            notify();
+            if (changed) changed();
             return;
         }
         if (tool == Tool::Mirror) {
-            before_ = lines;
             lines[index].a = reflectPreset(lines[index].a);
             lines[index].b = reflectPreset(lines[index].b);
             rebuild();
             emitCommand(QString("MIRROR 关于%1镜像完成  %2")
-                .arg(mirrorAxisName(), lineDetails(index, lines[index])));
+                .arg(mirrorAxisName(), lineDetails(lines[index])));
             notify();
             return;
         }
 
-        active_ = index; before_ = lines; dragStart_ = p;
+        active_ = index; before_ = lines[index]; dragStart_ = p;
         if (tool == Tool::Rotate) {
             const auto& line = lines[index];
             center_ = (line.a + line.b) / 2.0;
@@ -256,8 +269,8 @@ protected:
         const QPointF p = hoverPoint;
         if (tool == Tool::Move || tool == Tool::Select) {
             const QPointF delta = p - dragStart_;
-            lines[active_].a = before_[active_].a + delta;
-            lines[active_].b = before_[active_].b + delta;
+            lines[active_].a = before_.a + delta;
+            lines[active_].b = before_.b + delta;
             setLive(QString("%1  ΔX=%2  ΔY=%3  距离=%4")
                 .arg(tool == Tool::Move ? "MOVE 正在移动" : "拖动对象")
                 .arg(delta.x(), 0, 'f', 2).arg(delta.y(), 0, 'f', 2)
@@ -268,8 +281,8 @@ protected:
                 const QPointF v = q - center_; const double c = std::cos(angle), s = std::sin(angle);
                 return center_ + QPointF(v.x() * c - v.y() * s, v.x() * s + v.y() * c);
             };
-            lines[active_].a = rotate(before_[active_].a);
-            lines[active_].b = rotate(before_[active_].b);
+            lines[active_].a = rotate(before_.a);
+            lines[active_].b = rotate(before_.b);
             setLive(QString("ROTATE 正在旋转  角度=%1°").arg(angle * 180.0 / std::acos(-1.0), 0, 'f', 2));
         }
         rebuild();
@@ -281,22 +294,22 @@ protected:
         }
         if (event->button() == Qt::LeftButton && dragging_) {
             dragging_ = false;
-            if (lines != before_) {
+            if (active_ >= 0 && active_ < lines.size() && !(lines[active_] == before_)) {
                 if (tool == Tool::Move || tool == Tool::Select) {
-                    const QPointF delta = lines[active_].a - before_[active_].a;
+                    const QPointF delta = lines[active_].a - before_.a;
                     emitCommand(QString("%1 完成  ΔX=%2  ΔY=%3  距离=%4  |  %5")
                         .arg(tool == Tool::Move ? "MOVE" : "DRAG")
                         .arg(delta.x(), 0, 'f', 2).arg(delta.y(), 0, 'f', 2)
                         .arg(std::hypot(delta.x(), delta.y()), 0, 'f', 2)
-                        .arg(lineDetails(active_, lines[active_])));
+                        .arg(lineDetails(lines[active_])));
                 } else if (tool == Tool::Rotate) {
-                    const QLineF oldLine(before_[active_].a, before_[active_].b);
+                    const QLineF oldLine(before_.a, before_.b);
                     const QLineF newLine(lines[active_].a, lines[active_].b);
                     double angle = newLine.angle() - oldLine.angle();
                     if (angle > 180.0) angle -= 360.0;
                     if (angle < -180.0) angle += 360.0;
                     emitCommand(QString("ROTATE 完成  角度=%1°  |  %2")
-                        .arg(angle, 0, 'f', 2).arg(lineDetails(active_, lines[active_])));
+                        .arg(angle, 0, 'f', 2).arg(lineDetails(lines[active_])));
                 }
                 notify();
             }
@@ -360,7 +373,18 @@ private:
         return result;
     }
 
-    void notify() { if (changed) changed(); }
+    void notify() {
+        const auto& line = lines[selected_];
+        history.update(line.id, line);
+        if (changed) changed();
+    }
+    void cancelInteraction() {
+        if (dragging_ && active_ >= 0 && active_ < lines.size()) lines[active_] = before_;
+        dragging_ = false;
+        active_ = -1;
+        hasFirst_ = hasPreview_ = false;
+        resetCustomMirror();
+    }
     void emitCommand(const QString& text) { if (command) command(text); }
     void setLive(const QString& text) { if (liveStatus) liveStatus(text); }
 
@@ -371,7 +395,7 @@ private:
     MirrorAxis mirrorAxis_ = MirrorAxis::XAxis;
     double startAngle_ = 0;
     QPoint panLast_;
-    QVector<CadLine> before_;
+    CadLine before_;
 };
 
 class MainWindow final : public QMainWindow {
@@ -409,27 +433,22 @@ public:
 
         buildCommandDock();
         connect(undo_, &QAction::triggered, this, [this] {
-            if (undoStates_.isEmpty()) return;
-            redoStates_.push_back(view_->lines); view_->lines = undoStates_.takeLast();
-            lastState_ = view_->lines; view_->clearSelection();
+            if (!view_->history.undo()) return;
+            view_->restoreHistoryView();
             appendCommand("UNDO 已撤销上一步操作"); updateHistory();
         });
         connect(redo_, &QAction::triggered, this, [this] {
-            if (redoStates_.isEmpty()) return;
-            undoStates_.push_back(view_->lines); view_->lines = redoStates_.takeLast();
-            lastState_ = view_->lines; view_->clearSelection();
+            if (!view_->history.redo()) return;
+            view_->restoreHistoryView();
             appendCommand("REDO 已恢复下一步操作"); updateHistory();
         });
-        view_->changed = [this] {
-            undoStates_.push_back(lastState_); redoStates_.clear();
-            lastState_ = view_->lines; updateHistory();
-        };
+        view_->changed = [this] { updateHistory(); };
         view_->command = [this](const QString& text) { appendCommand(text); };
         view_->liveStatus = [this](const QString& text) {
             prompt_->setText(QString("<span style='color:#53d8fb'>&gt;</span>&nbsp; %1").arg(text.toHtmlEscaped()));
             statusBar()->showMessage(text);
         };
-        lastState_ = view_->lines; updateHistory();
+        updateHistory();
         appendCommand("MiniCAD 已启动。请选择工具开始绘图。");
         prompt_->setText("<span style='color:#53d8fb'>&gt;</span>&nbsp; 命令: 就绪");
         statusBar()->showMessage("就绪");
@@ -477,7 +496,7 @@ private:
     }
 
     void updateHistory() {
-        undo_->setEnabled(!undoStates_.isEmpty()); redo_->setEnabled(!redoStates_.isEmpty());
+        undo_->setEnabled(view_->history.undoCount() > 0); redo_->setEnabled(view_->history.redoCount() > 0);
     }
 
     CadView* view_ = nullptr;
@@ -485,12 +504,12 @@ private:
     QLabel* prompt_ = nullptr;
     QAction* undo_ = nullptr;
     QAction* redo_ = nullptr;
-    QVector<CadLine> lastState_;
-    QVector<QVector<CadLine>> undoStates_, redoStates_;
 };
 
+#ifndef MINICAD_NO_MAIN
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     MainWindow window; window.show();
     return app.exec();
 }
+#endif

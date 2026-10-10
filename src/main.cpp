@@ -1,9 +1,8 @@
+#include "version_history.h"
 #include <cmath>
 #include <iomanip>
 #include <iostream>
-#include <map>
 #include <memory>
-#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -35,118 +34,43 @@ struct LineEntity {
     bool deleted = false;
 };
 
-using ModelState = std::map<int, LineEntity>;
+struct LineGeometry { Point start, end; };
 
 class LineModel {
 public:
-    int create(Point start, Point end) {
-        const int id = nextId_++;
-        lines_[id] = LineEntity{id, start, end, false};
-        return id;
+    int create(Point start, Point end) { return history.create({start, end}); }
+    void erase(int id) { history.erase(id); }
+    void setLine(int id, Point start, Point end) {
+        history.update(id, {start, end});
     }
-
-    void erase(int id) {
-        auto& line = require(id);
-        line.deleted = true;
+    LineEntity require(int id) const {
+        const auto& v = history.requireVisible(id);
+        return {id, v.geometry.start, v.geometry.end, v.deleted};
     }
-
-    void setLine(int id, Point start, Point end, bool deleted = false) {
-        auto& line = require(id);
-        line.start = start;
-        line.end = end;
-        line.deleted = deleted;
-    }
-
-    const LineEntity& require(int id) const {
-        auto it = lines_.find(id);
-        if (it == lines_.end()) {
-            throw std::invalid_argument("unknown line id");
-        }
-        return it->second;
-    }
-
-    LineEntity& require(int id) {
-        return const_cast<LineEntity&>(std::as_const(*this).require(id));
-    }
-
-    ModelState snapshot() const { return lines_; }
-
-    void restore(ModelState state) { lines_ = std::move(state); }
-
-    int nextId() const { return nextId_; }
-
-    void setNextId(int value) { nextId_ = value; }
-
     std::vector<LineEntity> visibleLines() const {
         std::vector<LineEntity> result;
-        for (const auto& [id, line] : lines_) {
-            (void)id;
-            if (!line.deleted) {
-                result.push_back(line);
-            }
-        }
+        for (const auto& v : history.visibleVersions())
+            result.push_back({v.id, v.geometry.start, v.geometry.end, false});
         return result;
     }
-
-private:
-    ModelState lines_;
-    int nextId_ = 1;
+    VersionHistory<LineGeometry> history;
 };
-
-struct FullState {
-    ModelState lines;
-    int nextId = 1;
-};
-
-FullState capture(const LineModel& model) {
-    return {model.snapshot(), model.nextId()};
-}
-
-void restore(LineModel& model, FullState state) {
-    model.restore(std::move(state.lines));
-    model.setNextId(state.nextId);
-}
 
 class Command {
 public:
     virtual ~Command() = default;
     virtual const char* name() const = 0;
     virtual void execute(LineModel&) = 0;
-    virtual void undo(LineModel&) = 0;
-    virtual void redo(LineModel&) = 0;
 };
 
-class StateCommand : public Command {
+class EditCommand : public Command {
 public:
-    void execute(LineModel& model) final {
-        before_ = capture(model);
-        apply(model);
-        after_ = capture(model);
-    }
-
-    void undo(LineModel& model) final {
-        if (!before_) {
-            throw std::logic_error("command was not executed");
-        }
-        restore(model, *before_);
-    }
-
-    void redo(LineModel& model) final {
-        if (!after_) {
-            throw std::logic_error("command was not executed");
-        }
-        restore(model, *after_);
-    }
-
+    void execute(LineModel& model) final { apply(model); }
 protected:
     virtual void apply(LineModel&) = 0;
-
-private:
-    std::optional<FullState> before_;
-    std::optional<FullState> after_;
 };
 
-class CreateLineCommand final : public StateCommand {
+class CreateLineCommand final : public EditCommand {
 public:
     CreateLineCommand(Point start, Point end) : start_(start), end_(end) {}
     const char* name() const override { return "create"; }
@@ -159,7 +83,7 @@ private:
     Point end_;
 };
 
-class DeleteLineCommand final : public StateCommand {
+class DeleteLineCommand final : public EditCommand {
 public:
     explicit DeleteLineCommand(int id) : id_(id) {}
     const char* name() const override { return "delete"; }
@@ -171,7 +95,7 @@ private:
     int id_;
 };
 
-class MoveLineCommand final : public StateCommand {
+class MoveLineCommand final : public EditCommand {
 public:
     MoveLineCommand(int id, Point delta) : id_(id), delta_(delta) {}
     const char* name() const override { return "move"; }
@@ -179,7 +103,7 @@ public:
 protected:
     void apply(LineModel& model) override {
         const auto line = model.require(id_);
-        model.setLine(id_, line.start + delta_, line.end + delta_, line.deleted);
+        model.setLine(id_, line.start + delta_, line.end + delta_);
     }
 
 private:
@@ -194,7 +118,7 @@ Point rotatePoint(Point p, Point center, double radians) {
     return center + Point{q.x * c - q.y * s, q.x * s + q.y * c};
 }
 
-class RotateLineCommand final : public StateCommand {
+class RotateLineCommand final : public EditCommand {
 public:
     RotateLineCommand(int id, Point center, double degrees)
         : id_(id), center_(center), radians_(degrees * kPi / 180.0) {}
@@ -204,7 +128,7 @@ protected:
     void apply(LineModel& model) override {
         const auto line = model.require(id_);
         model.setLine(id_, rotatePoint(line.start, center_, radians_),
-                      rotatePoint(line.end, center_, radians_), line.deleted);
+                      rotatePoint(line.end, center_, radians_));
     }
 
 private:
@@ -225,7 +149,7 @@ Point mirrorPoint(Point point, Point axisStart, Point axisEnd) {
     return projection * 2.0 - point;
 }
 
-class MirrorLineCommand final : public StateCommand {
+class MirrorLineCommand final : public EditCommand {
 public:
     MirrorLineCommand(int id, Point axisStart, Point axisEnd)
         : id_(id), axisStart_(axisStart), axisEnd_(axisEnd) {}
@@ -235,7 +159,7 @@ protected:
     void apply(LineModel& model) override {
         const auto line = model.require(id_);
         model.setLine(id_, mirrorPoint(line.start, axisStart_, axisEnd_),
-                      mirrorPoint(line.end, axisStart_, axisEnd_), line.deleted);
+                      mirrorPoint(line.end, axisStart_, axisEnd_));
     }
 
 private:
@@ -248,37 +172,12 @@ class History {
 public:
     void execute(std::unique_ptr<Command> command, LineModel& model) {
         command->execute(model);
-        undo_.push_back(std::move(command));
-        redo_.clear();
     }
-
-    bool undo(LineModel& model) {
-        if (undo_.empty()) return false;
-        auto command = std::move(undo_.back());
-        undo_.pop_back();
-        command->undo(model);
-        redo_.push_back(std::move(command));
-        return true;
-    }
-
-    bool redo(LineModel& model) {
-        if (redo_.empty()) return false;
-        auto command = std::move(redo_.back());
-        redo_.pop_back();
-        command->redo(model);
-        undo_.push_back(std::move(command));
-        return true;
-    }
-
-    std::size_t undoCount() const { return undo_.size(); }
-    std::size_t redoCount() const { return redo_.size(); }
-
-private:
-    std::vector<std::unique_ptr<Command>> undo_;
-    std::vector<std::unique_ptr<Command>> redo_;
+    bool undo(LineModel& model) { return model.history.undo(); }
+    bool redo(LineModel& model) { return model.history.redo(); }
 };
 
-void printModel(const LineModel& model, const History& history) {
+void printModel(const LineModel& model) {
     std::cout << std::fixed << std::setprecision(3);
     const auto lines = model.visibleLines();
     if (lines.empty()) {
@@ -290,7 +189,8 @@ void printModel(const LineModel& model, const History& history) {
                       << line.end.y << ")\n";
         }
     }
-    std::cout << "undo=" << history.undoCount() << " redo=" << history.redoCount() << "\n";
+    std::cout << "operation=" << model.history.systemOperation()
+              << " undo=" << model.history.undoCount() << " redo=" << model.history.redoCount() << "\n";
 }
 
 double readDouble(std::istringstream& input, const char* label) {
@@ -318,19 +218,46 @@ void printHelp() {
 void runDemoTests() {
     LineModel model;
     History history;
+    auto checkLine = [&](int id, Point a, Point b) {
+        const auto line = model.require(id);
+        if (!nearlyEqual(line.start.x, a.x) || !nearlyEqual(line.start.y, a.y) ||
+            !nearlyEqual(line.end.x, b.x) || !nearlyEqual(line.end.y, b.y))
+            throw std::runtime_error("unexpected geometry in command history");
+    };
     history.execute(std::make_unique<CreateLineCommand>(Point{0, 0}, Point{2, 0}), model);
     const int id = model.visibleLines().front().id;
     history.execute(std::make_unique<MoveLineCommand>(id, Point{1, 2}), model);
+    checkLine(id, {1, 2}, {3, 2});
     history.execute(std::make_unique<RotateLineCommand>(id, Point{0, 0}, 90), model);
+    checkLine(id, {-2, 1}, {-2, 3});
     if (!history.undo(model) || !history.undo(model) || !history.redo(model)) {
         throw std::runtime_error("history demo failed");
     }
+    checkLine(id, {1, 2}, {3, 2});
+    // A failed operation must preserve the pending Redo branch.
+    try {
+        history.execute(std::make_unique<MirrorLineCommand>(id, Point{0, 0}, Point{0, 0}), model);
+        throw std::runtime_error("degenerate axis accepted");
+    } catch (const std::invalid_argument&) {}
+    if (model.history.systemOperation() != 2 || model.history.redoCount() != 1)
+        throw std::runtime_error("failed command changed history");
     history.execute(std::make_unique<MirrorLineCommand>(id, Point{0, 0}, Point{0, 1}), model);
-    if (history.redoCount() != 0) throw std::runtime_error("redo stack was not cleared");
+    checkLine(id, {-1, 2}, {-3, 2});
+    if (model.history.redoCount() != 0) throw std::runtime_error("redo branch was not cleared");
     history.execute(std::make_unique<DeleteLineCommand>(id), model);
+    if (!model.visibleLines().empty()) throw std::runtime_error("deleted entity visible");
     if (!history.undo(model) || model.visibleLines().size() != 1) {
         throw std::runtime_error("delete undo failed");
     }
+    checkLine(id, {-1, 2}, {-3, 2});
+    if (!history.redo(model) || !model.visibleLines().empty())
+        throw std::runtime_error("delete redo failed");
+    while (history.undo(model)) {}
+    if (!model.visibleLines().empty() || model.history.systemOperation() != 0)
+        throw std::runtime_error("undo to initial state failed");
+    while (history.redo(model)) {}
+    if (!model.visibleLines().empty() || model.history.systemOperation() != 4)
+        throw std::runtime_error("redo to final state failed");
     std::cout << "self-test passed\n";
 }
 
@@ -374,7 +301,7 @@ int main() {
                 } else if (command == "redo") {
                     if (!history.redo(model)) std::cout << "nothing to redo\n";
                 } else if (command == "list") {
-                    printModel(model, history);
+                    printModel(model);
                     continue;
                 } else if (command == "help") {
                     printHelp();
@@ -385,7 +312,7 @@ int main() {
                     std::cout << "unknown command\n";
                     continue;
                 }
-                printModel(model, history);
+                printModel(model);
             } catch (const std::exception& error) {
                 std::cout << "error: " << error.what() << '\n';
             }

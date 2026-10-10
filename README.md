@@ -5,7 +5,7 @@
 ## 已实现功能
 
 - 创建、移动、旋转、镜像和删除直线；
-- Undo/Redo；
+- 使用操作数和双十字链表实现 Undo/Redo，命令行与 GUI 共用历史核心；
 - 网格和 XY 坐标轴；
 - 画布平移和缩放；
 - 命令行程序 `homework1`，用于验证直线模型和命令历史。
@@ -106,7 +106,11 @@ Qt 的 MinGW 版本必须与 CMake 使用的编译器 ABI 匹配。当前 Qt 6.8
 ```text
 src/main.cpp       命令行直线模型和命令历史测试
 src/qt_main.cpp    Qt MiniCAD 图形界面
+src/version_history.h  系统链、实体链和版本管理
+tests/            历史核心与 Qt 交互测试
 CMakeLists.txt     CMake 和 Qt 配置
 docs/              作业要求、实现说明和课程总结
 qt/                本地 Qt SDK，不提交到 Git
 ```
+
+构建后可执行 `ctest --test-dir cmake-build-qt-jb --output-on-failure` 运行测试，终端 `PATH` 需包含 Qt 和 MinGW 的 `bin`。详细设计见 `docs/实现说明.md`。
