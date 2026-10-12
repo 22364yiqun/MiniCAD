@@ -120,6 +120,7 @@ inline void restore(LineModel& model, FullState state) {
 }
 
 class Command {
+    // 抽象接口
 public:
     virtual ~Command() = default;
     virtual const char* name() const = 0;
@@ -129,6 +130,7 @@ public:
 };
 
 class StateCommand : public Command {
+    // 实现撤销逻辑
 public:
     void execute(LineModel& model) final {
         before_ = capture(model);

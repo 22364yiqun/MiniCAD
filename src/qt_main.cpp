@@ -36,6 +36,7 @@ static bool operator==(const CadLine& lhs, const CadLine& rhs) {
 enum class Tool { Select, Create, Move, Rotate, Mirror, Delete };
 enum class MirrorAxis { XAxis, YAxis, DiagonalPositive, DiagonalNegative, Custom };
 
+// 把坐标、长度、角度整理成界面显示的文字，不修改直线。
 static QString pointText(const QPointF& point) {
     return QString("(%1, %2)").arg(point.x(), 0, 'f', 2).arg(point.y(), 0, 'f', 2);
 }
