@@ -1,16 +1,14 @@
+#pragma once
+
 #include <cmath>
-#include <iomanip>
-#include <iostream>
 #include <map>
 #include <memory>
 #include <optional>
-#include <sstream>
 #include <stdexcept>
-#include <string>
 #include <utility>
 #include <vector>
 
-namespace {
+namespace minicad {
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kEpsilon = 1e-9;
@@ -20,11 +18,12 @@ struct Point {
     double y = 0.0;
 };
 
-Point operator+(Point a, Point b) { return {a.x + b.x, a.y + b.y}; }
-Point operator-(Point a, Point b) { return {a.x - b.x, a.y - b.y}; }
-Point operator*(Point p, double scale) { return {p.x * scale, p.y * scale}; }
+    // 运算符重载
+inline Point operator+(Point a, Point b) { return {a.x + b.x, a.y + b.y}; }
+inline Point operator-(Point a, Point b) { return {a.x - b.x, a.y - b.y}; }
+inline Point operator*(Point p, double scale) { return {p.x * scale, p.y * scale}; }
 
-bool nearlyEqual(double a, double b) {
+inline bool nearlyEqual(double a, double b) {
     return std::abs(a - b) <= kEpsilon;
 }
 
@@ -35,22 +34,27 @@ struct LineEntity {
     bool deleted = false;
 };
 
+    // 重命名 标准键值对格式
 using ModelState = std::map<int, LineEntity>;
 
+    // 问题就是这个next_id合理吗
 class LineModel {
 public:
     int create(Point start, Point end) {
+        // 创建直线
         const int id = nextId_++;
         lines_[id] = LineEntity{id, start, end, false};
         return id;
     }
 
     void erase(int id) {
+        // 删除直线
         auto& line = require(id);
         line.deleted = true;
     }
 
     void setLine(int id, Point start, Point end, bool deleted = false) {
+        // 修改指定直线的对应状态
         auto& line = require(id);
         line.start = start;
         line.end = end;
@@ -58,26 +62,33 @@ public:
     }
 
     const LineEntity& require(int id) const {
+        // 只读访问，不可修改直线
         auto it = lines_.find(id);
         if (it == lines_.end()) {
+            // 未找到
             throw std::invalid_argument("unknown line id");
         }
         return it->second;
     }
 
     LineEntity& require(int id) {
+        // 可修改版本
         return const_cast<LineEntity&>(std::as_const(*this).require(id));
     }
 
+    // 复制直线map
     ModelState snapshot() const { return lines_; }
 
+    // lines_ == state
     void restore(ModelState state) { lines_ = std::move(state); }
 
+    // 返回末尾id
     int nextId() const { return nextId_; }
 
     void setNextId(int value) { nextId_ = value; }
 
     std::vector<LineEntity> visibleLines() const {
+        //获取可见的直线
         std::vector<LineEntity> result;
         for (const auto& [id, line] : lines_) {
             (void)id;
@@ -89,7 +100,7 @@ public:
     }
 
 private:
-    ModelState lines_;
+    ModelState lines_; // 存放直线
     int nextId_ = 1;
 };
 
@@ -98,11 +109,12 @@ struct FullState {
     int nextId = 1;
 };
 
-FullState capture(const LineModel& model) {
+inline FullState capture(const LineModel& model) {
+    // 拍下当前 LineModel 的完整快照
     return {model.snapshot(), model.nextId()};
 }
 
-void restore(LineModel& model, FullState state) {
+inline void restore(LineModel& model, FullState state) {
     model.restore(std::move(state.lines));
     model.setNextId(state.nextId);
 }
@@ -187,7 +199,7 @@ private:
     Point delta_;
 };
 
-Point rotatePoint(Point p, Point center, double radians) {
+inline Point rotatePoint(Point p, Point center, double radians) {
     const Point q = p - center;
     const double c = std::cos(radians);
     const double s = std::sin(radians);
@@ -213,7 +225,7 @@ private:
     double radians_;
 };
 
-Point mirrorPoint(Point point, Point axisStart, Point axisEnd) {
+inline Point mirrorPoint(Point point, Point axisStart, Point axisEnd) {
     const Point axis = axisEnd - axisStart;
     const double lengthSquared = axis.x * axis.x + axis.y * axis.y;
     if (lengthSquared <= kEpsilon) {
@@ -278,121 +290,4 @@ private:
     std::vector<std::unique_ptr<Command>> redo_;
 };
 
-void printModel(const LineModel& model, const History& history) {
-    std::cout << std::fixed << std::setprecision(3);
-    const auto lines = model.visibleLines();
-    if (lines.empty()) {
-        std::cout << "(no visible lines)\n";
-    } else {
-        for (const auto& line : lines) {
-            std::cout << "line " << line.id << ": (" << line.start.x << ", "
-                      << line.start.y << ") -> (" << line.end.x << ", "
-                      << line.end.y << ")\n";
-        }
-    }
-    std::cout << "undo=" << history.undoCount() << " redo=" << history.redoCount() << "\n";
-}
-
-double readDouble(std::istringstream& input, const char* label) {
-    double value = 0.0;
-    if (!(input >> value)) throw std::invalid_argument(std::string("invalid ") + label);
-    return value;
-}
-
-int readInt(std::istringstream& input, const char* label) {
-    int value = 0;
-    if (!(input >> value)) throw std::invalid_argument(std::string("invalid ") + label);
-    return value;
-}
-
-void printHelp() {
-    std::cout << "commands:\n"
-              << "  create x1 y1 x2 y2\n"
-              << "  delete id\n"
-              << "  move id dx dy\n"
-              << "  rotate id cx cy degrees\n"
-              << "  mirror id ax ay bx by\n"
-              << "  undo | redo | list | help | quit\n";
-}
-
-void runDemoTests() {
-    LineModel model;
-    History history;
-    history.execute(std::make_unique<CreateLineCommand>(Point{0, 0}, Point{2, 0}), model);
-    const int id = model.visibleLines().front().id;
-    history.execute(std::make_unique<MoveLineCommand>(id, Point{1, 2}), model);
-    history.execute(std::make_unique<RotateLineCommand>(id, Point{0, 0}, 90), model);
-    if (!history.undo(model) || !history.undo(model) || !history.redo(model)) {
-        throw std::runtime_error("history demo failed");
-    }
-    history.execute(std::make_unique<MirrorLineCommand>(id, Point{0, 0}, Point{0, 1}), model);
-    if (history.redoCount() != 0) throw std::runtime_error("redo stack was not cleared");
-    history.execute(std::make_unique<DeleteLineCommand>(id), model);
-    if (!history.undo(model) || model.visibleLines().size() != 1) {
-        throw std::runtime_error("delete undo failed");
-    }
-    std::cout << "self-test passed\n";
-}
-
-}  // namespace
-
-int main() {
-    try {
-        runDemoTests();
-        LineModel model;
-        History history;
-        std::cout << "Line Undo/Redo demo. Type 'help' for commands.\n";
-        std::string line;
-        while (std::cout << "> " && std::getline(std::cin, line)) {
-            std::istringstream input(line);
-            std::string command;
-            input >> command;
-            if (command.empty()) continue;
-            try {
-                if (command == "create") {
-                    const Point a{readDouble(input, "x1"), readDouble(input, "y1")};
-                    const Point b{readDouble(input, "x2"), readDouble(input, "y2")};
-                    history.execute(std::make_unique<CreateLineCommand>(a, b), model);
-                } else if (command == "delete") {
-                    history.execute(std::make_unique<DeleteLineCommand>(readInt(input, "id")), model);
-                } else if (command == "move") {
-                    const int id = readInt(input, "id");
-                    history.execute(std::make_unique<MoveLineCommand>(
-                        id, Point{readDouble(input, "dx"), readDouble(input, "dy")}), model);
-                } else if (command == "rotate") {
-                    const int id = readInt(input, "id");
-                    const Point center{readDouble(input, "cx"), readDouble(input, "cy")};
-                    history.execute(std::make_unique<RotateLineCommand>(
-                        id, center, readDouble(input, "degrees")), model);
-                } else if (command == "mirror") {
-                    const int id = readInt(input, "id");
-                    const Point a{readDouble(input, "ax"), readDouble(input, "ay")};
-                    const Point b{readDouble(input, "bx"), readDouble(input, "by")};
-                    history.execute(std::make_unique<MirrorLineCommand>(id, a, b), model);
-                } else if (command == "undo") {
-                    if (!history.undo(model)) std::cout << "nothing to undo\n";
-                } else if (command == "redo") {
-                    if (!history.redo(model)) std::cout << "nothing to redo\n";
-                } else if (command == "list") {
-                    printModel(model, history);
-                    continue;
-                } else if (command == "help") {
-                    printHelp();
-                    continue;
-                } else if (command == "quit" || command == "exit") {
-                    break;
-                } else {
-                    std::cout << "unknown command\n";
-                    continue;
-                }
-                printModel(model, history);
-            } catch (const std::exception& error) {
-                std::cout << "error: " << error.what() << '\n';
-            }
-        }
-    } catch (const std::exception& error) {
-        std::cerr << "fatal: " << error.what() << '\n';
-        return 1;
-    }
-    return 0;
-}
+}  // namespace minicad

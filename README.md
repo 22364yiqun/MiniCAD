@@ -1,6 +1,6 @@
 # MiniCAD Qt
 
-这是一个使用 C++20 和 Qt 6 Widgets 实现的二维 MiniCAD 项目。界面基于 `QMainWindow`、`QToolBar`、`QGraphicsView` 和 `QGraphicsScene`。
+这是一个使用 C++20 和 Qt 6 Widgets 实现的二维 MiniCAD 项目。界面基于 `QMainWindow`、`QToolBar`、`QGraphicsView` 和 `QGraphicsScene`。图形界面的鼠标操作和底部文本命令共用 `src/line_model.hpp` 中的直线模型、五种命令和撤销重做历史。
 
 ## 已实现功能
 
@@ -8,7 +8,7 @@
 - Undo/Redo；
 - 网格和 XY 坐标轴；
 - 画布平移和缩放；
-- 命令行程序 `homework1`，用于验证直线模型和命令历史。
+- Qt 底部面板支持直接输入命令修改当前画布。
 
 ## 环境要求
 
@@ -57,7 +57,7 @@ CMAKE_PREFIX_PATH=C:/Users/yiqun/Desktop/Computer Graphics/homework1/qt/6.8.3/mi
 
 项目的 `CMakeLists.txt` 会自动查找项目内的 Qt 路径。重新加载 CMake 后，选择 `minicad_qt` 作为运行目标。
 
-## 命令行构建
+## 构建 Qt 程序
 
 在项目根目录执行：
 
@@ -87,6 +87,21 @@ qt/6.8.3/mingw_64/bin/windeployqt.exe --no-translations cmake-build-qt-jb/minica
 .\cmake-build-qt-jb\minicad_qt.exe
 ```
 
+## 窗口内命令
+
+在 Qt 窗口底部输入框按 Enter 执行命令，操作直接更新当前画布：
+
+```text
+create x1 y1 x2 y2
+delete id
+move id dx dy
+rotate id cx cy degrees
+mirror id ax ay bx by
+undo | redo | list | help
+```
+
+例如 `create 0 0 100 0` 创建一条直线，随后 `move 1 20 10` 移动它。直线编号可用 `list` 查看。
+
 ## 常见问题
 
 ### 找不到 Qt6Config.cmake
@@ -104,8 +119,9 @@ Qt 的 MinGW 版本必须与 CMake 使用的编译器 ABI 匹配。当前 Qt 6.8
 ## 目录说明
 
 ```text
-src/main.cpp       命令行直线模型和命令历史测试
-src/qt_main.cpp    Qt MiniCAD 图形界面
+src/line_model.hpp  直线模型、五种命令和 History
+src/qt_main.cpp    Qt MiniCAD 图形界面及窗口内命令输入
+tests/qt_history_test.cpp  Qt 鼠标与文本命令交互测试
 CMakeLists.txt     CMake 和 Qt 配置
 docs/              作业要求、实现说明和课程总结
 qt/                本地 Qt SDK，不提交到 Git
