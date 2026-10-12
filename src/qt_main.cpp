@@ -9,11 +9,13 @@
 #include <QGraphicsScene>
 #include <QGraphicsView>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMainWindow>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QScrollBar>
+#include <QStringList>
 #include <QStatusBar>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -90,6 +92,127 @@ public:
         }
         selected_ = -1;
         rebuild();
+    }
+
+    QString executeTextCommand(const QString& text) {
+        const QStringList parts = text.simplified().split(' ', Qt::SkipEmptyParts);
+        if (parts.isEmpty()) return {};
+        const QString verb = parts[0].toLower();
+        auto expect = [&](int count) {
+            if (parts.size() != count) throw std::invalid_argument("wrong number of arguments; type help");
+        };
+        auto number = [&](int index) {
+            bool ok = false;
+            const double value = parts[index].toDouble(&ok);
+            if (!ok || !std::isfinite(value)) throw std::invalid_argument("invalid number");
+            return value;
+        };
+        auto idAt = [&](int index) {
+            bool ok = false;
+            const int id = parts[index].toInt(&ok);
+            if (!ok || id <= 0) throw std::invalid_argument("invalid line id");
+            return id;
+        };
+        auto details = [&](int id) {
+            CadLine line = history.requireVisible(id).geometry;
+            line.id = id;
+            return lineDetails(line);
+        };
+        auto refresh = [&] {
+            restoreHistoryView();
+            if (changed) changed();
+        };
+        try {
+            if (verb == "help") {
+                expect(1);
+                return "create x1 y1 x2 y2 | delete id | move id dx dy | "
+                       "rotate id cx cy degrees | mirror id ax ay bx by | "
+                       "undo | redo | list | help";
+            }
+            if (verb == "list") {
+                expect(1);
+                QStringList result;
+                for (const auto& version : history.visibleVersions()) {
+                    CadLine line = version.geometry;
+                    line.id = version.id;
+                    result << lineDetails(line);
+                }
+                return result.isEmpty() ? QString("当前没有直线") : result.join('\n');
+            }
+            if (verb == "undo") {
+                expect(1);
+                if (!history.undo()) return "没有可撤销的操作";
+                refresh();
+                return "已撤销";
+            }
+            if (verb == "redo") {
+                expect(1);
+                if (!history.redo()) return "没有可重做的操作";
+                refresh();
+                return "已重做";
+            }
+            if (verb == "create") {
+                expect(5);
+                const QPointF a(number(1), number(2));
+                const QPointF b(number(3), number(4));
+                const int id = history.create(CadLine{a, b});
+                refresh();
+                return QString("已创建 %1").arg(details(id));
+            }
+            if (verb == "delete") {
+                expect(2);
+                const int id = idAt(1);
+                const QString oldLine = details(id);
+                history.erase(id);
+                refresh();
+                return QString("已删除 %1").arg(oldLine);
+            }
+            if (verb == "move") {
+                expect(4);
+                const int id = idAt(1);
+                CadLine line = history.requireVisible(id).geometry;
+                const QPointF delta(number(2), number(3));
+                line.a += delta;
+                line.b += delta;
+                history.update(id, line);
+                refresh();
+                return QString("已移动 %1").arg(details(id));
+            }
+            if (verb == "rotate") {
+                expect(5);
+                const int id = idAt(1);
+                CadLine line = history.requireVisible(id).geometry;
+                const QPointF center(number(2), number(3));
+                const double radians = number(4) * std::acos(-1.0) / 180.0;
+                auto rotate = [&](QPointF p) {
+                    const QPointF v = p - center;
+                    const double c = std::cos(radians), s = std::sin(radians);
+                    return center + QPointF(v.x() * c - v.y() * s, v.x() * s + v.y() * c);
+                };
+                line.a = rotate(line.a);
+                line.b = rotate(line.b);
+                history.update(id, line);
+                refresh();
+                return QString("已旋转 %1").arg(details(id));
+            }
+            if (verb == "mirror") {
+                expect(6);
+                const int id = idAt(1);
+                CadLine line = history.requireVisible(id).geometry;
+                const QPointF a(number(2), number(3));
+                const QPointF b(number(4), number(5));
+                if (QLineF(a, b).length() <= 1e-6)
+                    throw std::invalid_argument("mirror axis needs two distinct points");
+                line.a = reflectPoint(line.a, a, b);
+                line.b = reflectPoint(line.b, a, b);
+                history.update(id, line);
+                refresh();
+                return QString("已镜像 %1").arg(details(id));
+            }
+            throw std::invalid_argument("unknown command; type help");
+        } catch (const std::exception& error) {
+            return QString("错误：%1").arg(QString::fromUtf8(error.what()));
+        }
     }
 
     void rebuild() {
@@ -432,6 +555,13 @@ public:
         undo_->setShortcut(QKeySequence::Undo); redo_->setShortcut(QKeySequence::Redo);
 
         buildCommandDock();
+        connect(commandInput_, &QLineEdit::returnPressed, this, [this] {
+            const QString input = commandInput_->text().trimmed();
+            if (input.isEmpty()) return;
+            appendCommand(QString("> %1").arg(input));
+            appendCommand(view_->executeTextCommand(input));
+            commandInput_->clear();
+        });
         connect(undo_, &QAction::triggered, this, [this] {
             if (!view_->history.undo()) return;
             view_->restoreHistoryView();
@@ -465,7 +595,11 @@ private:
         commandHistory_ = new QPlainTextEdit(panel); commandHistory_->setReadOnly(true);
         commandHistory_->setMaximumBlockCount(500); commandHistory_->setMinimumHeight(90);
         prompt_ = new QLabel(panel); prompt_->setMinimumHeight(24);
-        layout->addWidget(commandHistory_); layout->addWidget(prompt_);
+        commandInput_ = new QLineEdit(panel);
+        commandInput_->setPlaceholderText("输入 help 查看命令，例如 create 0 0 100 0；按 Enter 执行");
+        layout->addWidget(commandHistory_);
+        layout->addWidget(prompt_);
+        layout->addWidget(commandInput_);
         dock->setWidget(panel); addDockWidget(Qt::BottomDockWidgetArea, dock);
         resizeDocks({dock}, {145}, Qt::Vertical);
         dock->setStyleSheet(
@@ -476,6 +610,8 @@ private:
             "font-family:Consolas, 'Microsoft YaHei UI'; font-size:12px; selection-background-color:#315a70; }"
             "QLabel { color:#dce5ed; background:#11151a; border:1px solid #333b45; "
             "font-family:Consolas, 'Microsoft YaHei UI'; padding:2px 6px; }"
+            "QLineEdit { color:#f4f7fa; background:#10151b; border:1px solid #53d8fb; "
+            "font-family:Consolas, 'Microsoft YaHei UI'; padding:5px 7px; }"
         );
     }
 
@@ -501,6 +637,7 @@ private:
 
     CadView* view_ = nullptr;
     QPlainTextEdit* commandHistory_ = nullptr;
+    QLineEdit* commandInput_ = nullptr;
     QLabel* prompt_ = nullptr;
     QAction* undo_ = nullptr;
     QAction* redo_ = nullptr;

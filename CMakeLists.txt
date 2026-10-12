@@ -3,8 +3,6 @@ project(homework1)
 
 set(CMAKE_CXX_STANDARD 20)
 
-add_executable(homework1 src/main.cpp)
-
 set(LOCAL_QT_PREFIX "${CMAKE_SOURCE_DIR}/qt/6.8.3/mingw_64")
 if (EXISTS "${LOCAL_QT_PREFIX}/lib/cmake/Qt6/Qt6Config.cmake")
     list(PREPEND CMAKE_PREFIX_PATH "${LOCAL_QT_PREFIX}")
@@ -25,6 +23,5 @@ if (BUILD_TESTING)
     get_filename_component(QT_PLATFORM_PLUGINS "${Qt6_DIR}/../../../plugins/platforms" ABSOLUTE)
     set_tests_properties(qt_history PROPERTIES ENVIRONMENT
         "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${QT_PLATFORM_PLUGINS}")
-    add_test(NAME command_line_self_test COMMAND homework1)
-    set_tests_properties(version_history qt_history command_line_self_test PROPERTIES TIMEOUT 30)
+    set_tests_properties(version_history qt_history PROPERTIES TIMEOUT 30)
 endif()
