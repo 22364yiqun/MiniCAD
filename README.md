@@ -119,6 +119,8 @@ Qt 的 MinGW 版本必须与 CMake 使用的编译器 ABI 匹配。当前 Qt 6.8
 
 ## 目录说明
 
+想系统理解架构、各功能的实现和撤销重做的数据流，可阅读 [项目详细说明](docs/项目详细说明.md)。
+
 ```text
 src/line_model.hpp  直线模型、五种命令和 History
 src/qt_main.cpp    Qt MiniCAD 图形界面及窗口内命令输入

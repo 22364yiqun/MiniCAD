@@ -54,7 +54,7 @@ public:
     }
 
     void setLine(int id, Point start, Point end, bool deleted = false) {
-        // 修改指定直线的对应状态
+        // 修改指定直线的对应状态，设置已有实体的端点和删除状态。
         auto& line = require(id);
         line.start = start;
         line.end = end;
@@ -80,6 +80,7 @@ public:
     ModelState snapshot() const { return lines_; }
 
     // lines_ == state
+    // 恢复之前的状态
     void restore(ModelState state) { lines_ = std::move(state); }
 
     // 返回末尾id
