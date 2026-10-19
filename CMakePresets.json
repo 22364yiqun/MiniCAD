@@ -1,0 +1,34 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "vscode-debug",
+      "displayName": "VS Code Debug (Qt 6.8.3 / MinGW 13.1)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-vscode",
+      "environment": {
+        "PATH": "${sourceDir}/qt/Tools/mingw1310_64/bin;${sourceDir}/qt/6.8.3/mingw_64/bin;$penv{PATH}"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "${sourceDir}/qt/Tools/mingw1310_64/bin/gcc.exe",
+        "CMAKE_CXX_COMPILER": "${sourceDir}/qt/Tools/mingw1310_64/bin/g++.exe",
+        "CMAKE_MAKE_PROGRAM": "${sourceDir}/qt/Tools/Ninja/ninja.exe"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "vscode-debug",
+      "configurePreset": "vscode-debug"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "vscode-debug",
+      "configurePreset": "vscode-debug",
+      "output": { "outputOnFailure": true },
+      "environment": { "QT_QPA_PLATFORM": "offscreen" }
+    }
+  ]
+}

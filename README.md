@@ -16,7 +16,7 @@
 - CMake 3.16 或更高版本；
 - Qt 6 Widgets；
 - 与 Qt SDK 匹配的 MinGW 编译器；
-- CLion 2025 或其他支持 CMake 的 IDE。
+- VS Code（安装 CMake Tools 和 C/C++ 扩展）或其他支持 CMake 的 IDE。
 
 当前项目使用 Qt 6.8.3 MinGW，默认路径为：
 
@@ -24,7 +24,7 @@
 qt/6.8.3/mingw_64
 ```
 
-Qt SDK 不提交到 Git，新工作区需要单独安装。
+Qt SDK 与构建工具不提交到 Git，新工作区需要单独安装。
 
 ## 安装 Qt
 
@@ -41,50 +41,50 @@ aqt install-qt windows desktop 6.8.3 win64_mingw -O qt
 qt/6.8.3/mingw_64/lib/cmake/Qt6/Qt6Config.cmake
 ```
 
-## CLion 配置
+再安装与 Qt 6.8.3 匹配的 MinGW 13.1，以及独立的 CMake 和 Ninja：
 
-打开项目后，在 `Settings -> Build, Execution, Deployment -> Toolchains` 中选择与 Qt 匹配的 MinGW。当前环境使用：
-
-```text
-D:/JetBrains/CLion 2025.2.4/bin/mingw
+```powershell
+aqt install-tool windows desktop tools_mingw1310 qt.tools.win64_mingw1310 -O qt
+aqt install-tool windows desktop tools_cmake qt.tools.cmake -O qt
+aqt install-tool windows desktop tools_ninja qt.tools.ninja -O qt
 ```
 
-CMake 配置中的 Qt 路径为：
+## VS Code 配置
 
-```text
-CMAKE_PREFIX_PATH=C:/Users/yiqun/Desktop/Computer Graphics/homework1/qt/6.8.3/mingw_64
-```
+用 VS Code 打开项目根目录，安装工作区推荐的 **CMake Tools** 和 **C/C++** 扩展。项目已有 `CMakePresets.json` 和 `.vscode/` 配置，打开后选择 `vscode-debug` 预设；CMake Tools 会自动配置项目。
 
-项目的 `CMakeLists.txt` 会自动查找项目内的 Qt 路径。重新加载 CMake 后，选择 `minicad_qt` 作为运行目标。
+- `Ctrl+Shift+B`：构建 `minicad_qt`；
+- `F5`：构建并调试 `minicad_qt.exe`；
+- 测试：在 CMake Tools 中运行，或执行下面的 `ctest` 命令。
+
+VS Code 配置使用项目内 `qt/Tools` 中的 MinGW 13.1、CMake、Ninja 和 GDB，与 Qt 6.8.3 MinGW SDK 匹配。
 
 ## 构建 Qt 程序
 
 在项目根目录执行：
 
 ```powershell
-cmake -S . -B cmake-build-qt-jb -G Ninja `
-  "-DCMAKE_PREFIX_PATH=$PWD/qt/6.8.3/mingw_64" `
-  "-DCMAKE_C_COMPILER=D:/JetBrains/CLion 2025.2.4/bin/mingw/bin/gcc.exe" `
-  "-DCMAKE_CXX_COMPILER=D:/JetBrains/CLion 2025.2.4/bin/mingw/bin/g++.exe"
-cmake --build cmake-build-qt-jb --target minicad_qt
+$cmake = './qt/Tools/CMake_64/bin/cmake.exe'
+& $cmake --preset vscode-debug
+& $cmake --build --preset vscode-debug --target minicad_qt
 ```
 
 生成文件：
 
 ```text
-cmake-build-qt-jb/minicad_qt.exe
+cmake-build-vscode/minicad_qt.exe
 ```
 
-如果需要部署 Qt DLL：
+构建后会自动部署运行所需的 Qt DLL。如果需要手动重新部署：
 
 ```powershell
-qt/6.8.3/mingw_64/bin/windeployqt.exe --no-translations cmake-build-qt-jb/minicad_qt.exe
+qt/6.8.3/mingw_64/bin/windeployqt.exe --no-translations cmake-build-vscode/minicad_qt.exe
 ```
 
 运行程序：
 
 ```powershell
-.\cmake-build-qt-jb\minicad_qt.exe
+.\cmake-build-vscode\minicad_qt.exe
 ```
 
 ## 窗口内命令
@@ -112,10 +112,6 @@ undo | redo | list | help
 
 Qt 的 MinGW 版本必须与 CMake 使用的编译器 ABI 匹配。当前 Qt 6.8.3 `win64_mingw` 应使用 MinGW 13.1，不要混用 MSYS2 UCRT64 GCC 16，否则可能出现 `__imp___argc` 等链接错误。
 
-### CLion 使用旧构建目录
-
-将 CMake 构建目录改为 `cmake-build-qt-jb`，并将运行目标改为 `minicad_qt`。旧的 `homework1_viewer` 已经移除。
-
 ## 目录说明
 
 ```text
@@ -127,4 +123,11 @@ docs/              作业要求、实现说明和课程总结
 qt/                本地 Qt SDK，不提交到 Git
 ```
 
-构建后可执行 `ctest --test-dir cmake-build-qt-jb --output-on-failure` 运行测试，终端 `PATH` 需包含 Qt 和 MinGW 的 `bin`。详细设计见 `docs/实现说明.md`。
+构建全部目标并运行测试：
+
+```powershell
+& './qt/Tools/CMake_64/bin/cmake.exe' --build --preset vscode-debug
+& './qt/Tools/CMake_64/bin/ctest.exe' --preset vscode-debug
+```
+
+详细设计见 `docs/实现说明.md`。

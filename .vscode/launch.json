@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "MiniCAD Qt (Debug)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/cmake-build-vscode/minicad_qt.exe",
+      "cwd": "${workspaceFolder}",
+      "MIMode": "gdb",
+      "miDebuggerPath": "${workspaceFolder}/qt/Tools/mingw1310_64/bin/gdb.exe",
+      "environment": [
+        {
+          "name": "PATH",
+          "value": "${workspaceFolder}/qt/Tools/mingw1310_64/bin;${workspaceFolder}/qt/6.8.3/mingw_64/bin;${env:PATH}"
+        }
+      ],
+      "externalConsole": false,
+      "preLaunchTask": "CMake: build"
+    }
+  ]
+}

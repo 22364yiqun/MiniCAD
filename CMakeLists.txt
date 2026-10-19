@@ -12,6 +12,20 @@ set(CMAKE_AUTOMOC ON)
 add_executable(minicad_qt WIN32 src/qt_main.cpp)
 target_link_libraries(minicad_qt PRIVATE Qt6::Widgets)
 
+if(WIN32)
+    get_filename_component(QT_BIN_DIR "${Qt6_DIR}/../../../bin" ABSOLUTE)
+    get_filename_component(COMPILER_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    if(EXISTS "${QT_BIN_DIR}/windeployqt.exe")
+        add_custom_command(TARGET minicad_qt POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E env
+                "PATH=${QT_BIN_DIR};${COMPILER_BIN_DIR};$ENV{PATH}"
+                "${QT_BIN_DIR}/windeployqt.exe"
+                --release --compiler-runtime --no-translations
+                "$<TARGET_FILE:minicad_qt>"
+            VERBATIM)
+    endif()
+endif()
+
 include(CTest)
 if (BUILD_TESTING)
     add_executable(history_tests tests/history_tests.cpp)

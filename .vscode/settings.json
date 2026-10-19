@@ -1,0 +1,6 @@
+{
+  "cmake.cmakePath": "${workspaceFolder}/qt/Tools/CMake_64/bin/cmake.exe",
+  "cmake.useCMakePresets": "always",
+  "cmake.configureOnOpen": true,
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools"
+}
