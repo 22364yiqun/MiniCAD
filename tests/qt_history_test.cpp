@@ -52,16 +52,31 @@ int main(int argc, char** argv) {
     check(near(view.lines[0].a, {20, 20}), "redo move");
 
     view.setTool(Tool::Rotate);
-    drag(view, {120, 20}, {70, 70});
-    check(near(view.lines[0].a, {70, -30}) && near(view.lines[0].b, {70, 70}), "rotate");
+    click(view, {70, 20});
+    click(view, {20, 20});
+    check(near(view.lines[0].a, {20, 20}) && near(view.lines[0].b, {120, 20}),
+          "choosing pivot does not rotate");
+    drag(view, {120, 20}, {20, 120});
+    check(near(view.lines[0].a, {20, 20}) && near(view.lines[0].b, {20, 120}),
+          "rotate around chosen endpoint");
+    view.undo();
+    check(near(view.lines[0].b, {120, 20}), "undo chosen-pivot rotation");
+    view.redo();
+    check(near(view.lines[0].b, {20, 120}), "redo chosen-pivot rotation");
+    click(view, {20, 70});
+    click(view, {100, 100});
+    drag(view, {150, 100}, {100, 150});
+    check(near(view.lines[0].a, {180, 20}) && near(view.lines[0].b, {80, 20}),
+          "rotate around arbitrary canvas point");
+    view.undo();
 
     view.setTool(Tool::Mirror);
     view.setMirrorAxis(MirrorAxis::YAxis);
-    click(view, {70, 20});
-    check(near(view.lines[0].a, {-70, -30}) && near(view.lines[0].b, {-70, 70}), "mirror");
+    click(view, {20, 70});
+    check(near(view.lines[0].a, {-20, 20}) && near(view.lines[0].b, {-20, 120}), "mirror");
 
     view.setTool(Tool::Delete);
-    click(view, {-70, 20});
+    click(view, {-20, 70});
     check(view.lines.empty(), "delete");
     view.undo();
     check(view.lines.size() == 1 && view.lines[0].id == 1, "undo delete");
@@ -72,11 +87,11 @@ int main(int argc, char** argv) {
 
     view.setTool(Tool::Mirror);
     view.setMirrorAxis(MirrorAxis::Custom);
-    click(view, {-70, 20});
+    click(view, {-20, 70});
     click(view, {0, 0});
     click(view, {1, 0});
-    check(near(view.lines[0].a, {-70, 30}) &&
-          near(view.lines[0].b, {-70, -70}), "custom mirror");
+    check(near(view.lines[0].a, {-20, -20}) &&
+          near(view.lines[0].b, {-20, -120}), "custom mirror");
     check(!view.canRedo(), "new operation clears redo");
 
     check(view.executeTextCommand("create 0 0 10 0").startsWith("已创建"), "text create");

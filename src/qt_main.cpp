@@ -74,6 +74,7 @@ public:
         tool = nextTool;
         hasFirst_ = false;
         hasPreview_ = false;
+        resetRotation();
         resetCustomMirror();
         rebuild();
     }
@@ -231,6 +232,18 @@ public:
                                     QPen(QColor("#53d8fb"), 0), Qt::NoBrush);
             }
         }
+        if (tool == Tool::Rotate && rotateHasPivot_) {
+            const double radius = 7.0 / std::max(transform().m11(), 0.01);
+            scene()->addEllipse(QRectF(center_.x() - radius, center_.y() - radius,
+                                      radius * 2, radius * 2),
+                                QPen(QColor("#ff7bd5"), 0), Qt::NoBrush);
+            scene()->addLine(QLineF(center_.x() - radius * 1.5, center_.y(),
+                                    center_.x() + radius * 1.5, center_.y()),
+                             QPen(QColor("#ff7bd5"), 0));
+            scene()->addLine(QLineF(center_.x(), center_.y() - radius * 1.5,
+                                    center_.x(), center_.y() + radius * 1.5),
+                             QPen(QColor("#ff7bd5"), 0));
+        }
         if (tool == Tool::Mirror && mirrorAxis_ == MirrorAxis::Custom &&
             mirrorHasFirstAxis_ && hasMirrorHover_) {
             scene()->addLine(QLineF(mirrorAxisFirst_, mirrorAxisHover_),
@@ -302,6 +315,38 @@ protected:
             return;
         }
 
+        if (tool == Tool::Rotate) {
+            if (rotateTarget_ < 0) {
+                const int index = hitLine(p);
+                if (index < 0) return;
+                selected_ = index;
+                rotateTarget_ = index;
+                rebuild();
+                emitCommand(QString("SELECT %1").arg(lineDetails(index, lines[index])));
+                setLive("ROTATE 已选择直线；请单击指定旋转中心");
+                return;
+            }
+            if (!rotateHasPivot_) {
+                center_ = p;
+                rotateHasPivot_ = true;
+                rebuild();
+                setLive(QString("ROTATE 旋转中心 %1；请从中心以外按住并拖动鼠标确定角度")
+                    .arg(pointText(center_)));
+                return;
+            }
+            if (QLineF(center_, p).length() < 1.0 / std::max(transform().m11(), 0.01)) {
+                setLive("ROTATE 请从旋转中心以外的位置开始拖动");
+                return;
+            }
+            active_ = rotateTarget_;
+            before_ = lines;
+            dragStart_ = p;
+            startAngle_ = std::atan2(p.y() - center_.y(), p.x() - center_.x());
+            dragAngleRadians_ = 0.0;
+            dragging_ = true;
+            return;
+        }
+
         const int index = hitLine(p);
         if (index < 0) {
             if (tool == Tool::Select) {
@@ -338,12 +383,6 @@ protected:
         }
 
         active_ = index; before_ = lines; dragStart_ = p;
-        if (tool == Tool::Rotate) {
-            const auto& line = lines[index];
-            center_ = (line.a + line.b) / 2.0;
-            startAngle_ = std::atan2(p.y() - center_.y(), p.x() - center_.x());
-            dragAngleRadians_ = 0.0;
-        }
         dragging_ = true;
     }
 
@@ -426,6 +465,8 @@ protected:
                     commit(std::make_unique<minicad::RotateLineCommand>(
                         before_[active_].id, toModelPoint(center_),
                         dragAngleRadians_ * 180.0 / std::acos(-1.0)));
+                    resetRotation();
+                    rebuild();
                 } else {
                     const QPointF delta = lines[active_].a - before_[active_].a;
                     commit(std::make_unique<minicad::MoveLineCommand>(
@@ -489,7 +530,13 @@ private:
         dragging_ = false;
         hasFirst_ = false;
         hasPreview_ = false;
+        resetRotation();
         resetCustomMirror();
+    }
+
+    void resetRotation() {
+        rotateTarget_ = -1;
+        rotateHasPivot_ = false;
     }
 
     void resetCustomMirror() {
@@ -516,8 +563,8 @@ private:
     void setLive(const QString& text) { if (liveStatus) liveStatus(text); }
 
     bool hasFirst_ = false, hasPreview_ = false, panning_ = false, dragging_ = false;
-    bool mirrorHasFirstAxis_ = false, hasMirrorHover_ = false;
-    int active_ = -1, selected_ = -1, mirrorTarget_ = -1;
+    bool mirrorHasFirstAxis_ = false, hasMirrorHover_ = false, rotateHasPivot_ = false;
+    int active_ = -1, selected_ = -1, mirrorTarget_ = -1, rotateTarget_ = -1;
     QPointF first_, previewSecond_, dragStart_, center_, mirrorAxisFirst_, mirrorAxisHover_;
     MirrorAxis mirrorAxis_ = MirrorAxis::XAxis;
     double startAngle_ = 0, dragAngleRadians_ = 0;
